@@ -1,3 +1,5 @@
+from Core.utils import travels_dict, travels_list  # Use updated utils
+
 def recount_motion(motion: dict) -> tuple[int, int, int]:
     """
     recount curveCount, TotalSegmentCount and TotalPointCount in model3.json

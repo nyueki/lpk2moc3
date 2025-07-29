@@ -10,11 +10,20 @@ def hashed_filename(s: str) -> str:
     t.update(s.encode())
     return t.hexdigest()
 
+def normalize(s: str) -> str:
+    s = ''.join(c for c in s if ord(c) >= 32 or c == ' ')
+    s = re.sub(r'[<>:"|?*]', '', s)
+    if not s.strip():
+        s = "unnamed"
+    return s
+
 def safe_mkdir(s: str):
-    try:
-        os.mkdir(s)
-    except FileExistsError:
-        pass
+    """
+    Safely create a directory
+    """
+    # Create the directory
+    os.makedirs(s, exist_ok=True)
+    print(f"Created directory: {s}")
 
 def genkey(s: str) -> int:
     ret = 0
@@ -33,11 +42,20 @@ def decrypt(key: int, data: bytes) -> bytes:
             ret.append((tmpkey & 0xff) ^ i)
     return bytes(ret)
 
-match_rule = re.compile(r"^[0-9a-f]{32}.bin3?$")
+match_rule = re.compile(r"[0-9a-f]{32}.bin3?")
 def is_encrypted_file(s: str) -> bool:
-    if match_rule.match(s) != None:
+    if type(s) != str:
+        return False
+    if match_rule.fullmatch(s) != None:
         return True
     return False
+
+# find all enc_file in s
+def find_encrypted_file(s: str) -> str:
+    files = re.findall(match_rule, s)
+    if files == []:
+        return None
+    return files[0]
 
 def get_encrypted_file(s: str):
     if type(s) != str:
