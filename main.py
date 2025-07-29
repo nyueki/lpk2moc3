@@ -1,6 +1,7 @@
 import json
 import os
 import customtkinter as ctk
+from tkinterdnd2 import TkinterDnD, DND_FILES  # <-- Add this import
 from tkinter import filedialog, messagebox
 from threading import Thread
 import manager
@@ -10,12 +11,12 @@ from Core.utils import normalize, safe_mkdir
 currentThread = None
 
 
-class Win(ctk.CTk):
-
+class Win(ctk.CTk, TkinterDnD.DnDWrapper):  # <-- Inherit from DnDWrapper
     def __init__(self):
         super().__init__()
-        ctk.set_appearance_mode("system")  # "dark" or "light" or "system"
-        ctk.set_default_color_theme("blue")  # Windows 11-like accent
+        self.TkdndVersion = TkinterDnD._require(self)  # Initialize DnD
+        ctk.set_appearance_mode("system")
+        ctk.set_default_color_theme("green")
         self.title("LPK Model Extractor")
         self._width = 570
         self._height = 450
@@ -69,6 +70,48 @@ class Win(ctk.CTk):
         self.logArea.grid(row=4, column=0, columnspan=3, padx=padding, pady=(padding, 0), sticky="ew")
 
         self.getUnpack.grid(row=5, column=1, padx=padding, pady=(padding, padding))
+
+        # --- Drag & Drop support ---
+        self.input.drop_target_register(DND_FILES)
+        self.input.dnd_bind('<<Drop>>', self.on_drop_lpk)
+        self.config.drop_target_register(DND_FILES)
+        self.config.dnd_bind('<<Drop>>', self.on_drop_config)
+        self.output.drop_target_register(DND_FILES)
+        self.output.dnd_bind('<<Drop>>', self.on_drop_output)
+
+    def on_drop_lpk(self, event):
+        path = event.data.replace("{", "").replace("}", "")
+        if path.lower().endswith(".lpk"):
+            self.inputPath.set(path)
+            folder = os.path.dirname(path)
+            config_path = os.path.join(folder, "config.json")
+            if os.path.exists(config_path):
+                self.configPath.set(config_path)
+                self.updateModelNameFromConfig()
+            output_folder = os.path.join(folder, "output")
+            self.outputPath.set(output_folder)
+
+    def on_drop_config(self, event):
+        path = event.data.replace("{", "").replace("}", "")
+        if path.lower().endswith(".json"):
+            self.configPath.set(path)
+            folder = os.path.dirname(path)
+            # Find .lpk in same folder
+            for fname in os.listdir(folder):
+                if fname.endswith(".lpk"):
+                    self.inputPath.set(os.path.join(folder, fname))
+                    break
+            output_folder = os.path.join(folder, "output")
+            self.outputPath.set(output_folder)
+            self.updateModelNameFromConfig()
+
+    def on_drop_output(self, event):
+        path = event.data.replace("{", "").replace("}", "")
+        if os.path.isdir(path):
+            self.outputPath.set(path)
+        elif os.path.isfile(path):
+            # If a file is dropped, use its folder
+            self.outputPath.set(os.path.dirname(path))
 
     def updateModelNameFromConfig(self):
         config_path = self.config.get()
@@ -135,8 +178,19 @@ class Win(ctk.CTk):
             )
             try:
                 loader = LpkLoader(self.input.get(), self.config.get())
-                loader.extract(self.output.get())
+                # Pass the custom name to extract
+                loader.extract(self.output.get(), self.modelNameVar.get())
+                # Find the actual extracted folder name
+                extracted_folder = None
+                # Use the name from config if available, else fallback to user input
+                if self.config.get() and os.path.exists(self.config.get()):
+                    with open(self.config.get(), "r", encoding="utf-8") as f:
+                        config_data = json.load(f)
+                    extracted_folder = normalize(config_data.get("title", "character"))
+                else:
+                    extracted_folder = normalize(self.modelNameVar.get())
                 model_dir = os.path.join(self.outputPath.get(), normalize(self.modelNameVar.get()))
+                # Pass the custom name for renaming if needed
                 manager.SetupModel(model_dir, self.modelNameVar.get())
                 manager.Log("Extraction complete!")
                 messagebox.showinfo("LPK Model Extractor", "Extraction successful!")

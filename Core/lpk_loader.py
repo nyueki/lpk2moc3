@@ -41,10 +41,13 @@ class LpkLoader():
     def load_config(self):
         self.config = json.loads(open(self.configpath, "r", encoding="utf8").read())
     
-    def extract(self, outputdir: str):
+    def extract(self, outputdir: str, custom_name: str = None):
         if self.lpkType in ["STD2_0", "STM_1_0"]:
             for chara in self.mlve_config["list"]:
-                if self.lpkType == "STM_1_0" and hasattr(self, 'config') and 'title' in self.config:
+                # Use custom_name if provided, else fallback to config or embedded name
+                if custom_name:
+                    chara_name = custom_name
+                elif self.lpkType == "STM_1_0" and hasattr(self, 'config') and 'title' in self.config:
                     chara_name = self.config["title"]
                 else:
                     chara_name = chara["character"] if chara["character"] != "" else "character"

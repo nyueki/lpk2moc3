@@ -32,19 +32,34 @@ def Log(info):
 
 def organize_assets(model_dir: str):
     """
-    Move motion .json files to 'motions' and sound files (.wav, .ogg) to 'sounds' folder.
+    Move motion .json files to 'motions', sound files (.wav, .ogg, .mp3) to 'sounds', and expression files to 'expressions' folder.
+    Only create the expressions folder if there are expression files.
     """
+    import re
     motionPath = os.path.join(model_dir, "motions")
     soundPath = os.path.join(model_dir, "sounds")
+    # Scan for expression files first
+    expression_files = [fname for fname in os.listdir(model_dir)
+                        if os.path.isfile(os.path.join(model_dir, fname))
+                        and re.match(r"^Expressions_.*_File_\d+\.json$", fname)]
+    if expression_files:
+        expressionsPath = os.path.join(model_dir, "expressions")
+        safe_mkdir(expressionsPath)
+    else:
+        expressionsPath = None
     safe_mkdir(motionPath)
     safe_mkdir(soundPath)
     for fname in os.listdir(model_dir):
         fpath = os.path.join(model_dir, fname)
         if os.path.isfile(fpath):
-            # Move motion files
-            if fname.startswith("Motions_") and fname.endswith(".json"):
+            # Move motion files (e.g., Motions_TapAction_2_File_0.json)
+            if re.match(r"^Motions_.*_File_\d+\.json$", fname):
                 shutil.move(fpath, os.path.join(motionPath, fname))
                 Log(f"Moved motion file: {fname} -> motions/")
+            # Move expression files (e.g., Expressions_#_File_1.json)
+            elif expressionsPath and re.match(r"^Expressions_.*_File_\d+\.json$", fname):
+                shutil.move(fpath, os.path.join(expressionsPath, fname))
+                Log(f"Moved expression file: {fname} -> expressions/")
             # Move sound files
             elif fname.lower().endswith((".wav", ".ogg", ".mp3")):
                 shutil.move(fpath, os.path.join(soundPath, fname))
@@ -85,6 +100,56 @@ def organize_textures(model_dir: str, model_json_path: str, character_name: str)
         with open(model_json_path, "w", encoding="utf-8") as f:
             json.dump(model_json, f, ensure_ascii=False, indent=2)
         Log(f"Updated texture paths in {model_json_path}")
+
+
+def organize_textures_for_all_models(model_dir: str, character_name: str):
+    """
+    Update texture paths for all .model3.json files in the directory.
+    """
+    # Find texture files (png, jpg, etc.)
+    texture_files = [f for f in os.listdir(model_dir) if f.lower().endswith(('.png', '.jpg', '.jpeg'))]
+    if not texture_files:
+        return
+
+    # Determine resolution from the first texture file
+    import PIL.Image
+    first_texture_path = os.path.join(model_dir, texture_files[0])
+    with PIL.Image.open(first_texture_path) as img:
+        resolution = img.width  # Assuming square textures
+
+    texture_folder = f"{character_name}.{resolution}"
+    texture_folder_path = os.path.join(model_dir, texture_folder)
+    safe_mkdir(texture_folder_path)
+
+    # Move textures
+    for tex_file in texture_files:
+        shutil.move(os.path.join(model_dir, tex_file), os.path.join(texture_folder_path, tex_file))
+        Log(f"Moved texture file: {tex_file} -> {texture_folder}/")
+
+    # Update all .model3.json files
+    for fname in os.listdir(model_dir):
+        if fname.endswith(".model3.json"):
+            model_json_path = os.path.join(model_dir, fname)
+            with open(model_json_path, "r", encoding="utf-8") as f:
+                model_json = json.load(f)
+            if "FileReferences" in model_json and "Textures" in model_json["FileReferences"]:
+                model_json["FileReferences"]["Textures"] = [
+                    f"{texture_folder}/{os.path.basename(tex)}" for tex in model_json["FileReferences"]["Textures"]
+                ]
+                with open(model_json_path, "w", encoding="utf-8") as f:
+                    json.dump(model_json, f, ensure_ascii=False, indent=2)
+                Log(f"Updated texture paths in {model_json_path}")
+
+
+def CheckPath(model_dir: str):
+    """
+    Ensure motions and sounds directories exist and return their paths.
+    """
+    motionPath = os.path.join(model_dir, "motions")
+    soundPath = os.path.join(model_dir, "sounds")
+    safe_mkdir(motionPath)
+    safe_mkdir(soundPath)
+    return motionPath, soundPath
 
 
 def SetupModel(model_dir: str, modelNameBase: str = None):
@@ -143,7 +208,12 @@ def SetupModel(model_dir: str, modelNameBase: str = None):
                     Log("[ffmpeg]: %s" % out)
                     process.kill()
                     process.wait()
-                    removeList.append(srcPath)
+                    # Immediately remove the original .mp3 after conversion
+                    if os.path.exists(srcPath) and srcPath.lower().endswith(".mp3"):
+                        os.remove(srcPath)
+                        Log(f"Removed original mp3: {srcPath}")
+                    else:
+                        removeList.append(srcPath)
                     Log("[Sound]: %s >>> %s" % (_Sound, targetPath))
                     x["FileReferences"]["Motions"][groupName][idx]["Sound"] = "sounds/" + fileName
         # link hitAreas with motion groups
@@ -167,34 +237,29 @@ def SetupModel(model_dir: str, modelNameBase: str = None):
         with open(model3_path, "w", encoding='utf-8') as f:
             json.dump(x, f, ensure_ascii=False, indent=2)
 
-        # Organize textures and update model3.json
-        organize_textures(model_dir, model3_path, modelName)
+    # Organize textures and update all model3.json files
+    organize_textures_for_all_models(model_dir, modelNameBase)
 
-        if os.path.exists(modelJsonPath):
-            os.remove(modelJsonPath)
-        for i in set(removeList):
-            Log("removing: %s" % i)
-            if os.path.exists(i) and i not in x.get("Pose", ""):
-                os.remove(i)
-        new_dir = os.path.join(os.path.split(model_dir)[0], modelName)
-        # Only rename if the target is different from the source
-        if os.path.abspath(model_dir) != os.path.abspath(new_dir):
-            if os.path.exists(new_dir):
-                rmdir(new_dir)
-            os.rename(model_dir, new_dir)
-    # After all processing, organize assets
+    # After all processing, organize assets in the final model_dir
     organize_assets(model_dir)
+    # Now remove files
+    for i in set(removeList):
+        Log("removing: %s" % i)
+        if os.path.exists(i):
+            os.remove(i)
+    # Remove old model*.json files (but not .model3.json)
+    for fname in os.listdir(model_dir):
+        if re.match(r"^model\d*\.json$", fname) and not fname.endswith(".model3.json"):
+            try:
+                os.remove(os.path.join(model_dir, fname))
+                Log(f"Removed old model json: {fname}")
+            except Exception as e:
+                Log(f"Failed to remove {fname}: {e}")
 
-
-def CheckPath(model_dir: str):
-    motionPath = os.path.join(model_dir, "motions")
-    soundPath = os.path.join(model_dir, "sounds")
-    if not os.path.exists(motionPath):
-        os.makedirs(motionPath)
-    if not os.path.exists(soundPath):
-        os.makedirs(soundPath)
-    return motionPath, soundPath
-
-
-if __name__ == '__main__':
-    SetupModel("path to model dir", "model name")
+    # Always rename to modelNameBase (not last modelName)
+    new_dir = os.path.join(os.path.split(model_dir)[0], normalize(modelNameBase))
+    if os.path.abspath(model_dir) != os.path.abspath(new_dir):
+        if os.path.exists(new_dir):
+            rmdir(new_dir)
+        os.rename(model_dir, new_dir)
+        model_dir = new_dir  # Update model_dir to new location
